@@ -51,7 +51,7 @@ python generate/Cities_predicate_multi_view.py --config configs/SS-CVNet.yaml --
 │   └── SS-CVNet.yaml                       # Training configuration (incl. ablation options)
 ├── models/                                 # Model definitions
 │   ├── ss_cvnet.py                         # SS-CVNet full network + factory
-│   ├── VDWSA.py                            # Depth-aware window self-attention (VDWSA)
+│   ├── VIFE.py                            # Depth-aware window self-attention (VIFE)
 │   ├── modules.py                          # Shared modules: alignment, backbone encoder, heads
 │   ├── model.py                            # Multi-architecture model factory
 │   ├── loss.py                             # Loss: weighted MSE + physics constraint
@@ -75,9 +75,9 @@ All ablations are controlled by `model.ablation` in [configs/SS-CVNet.yaml](conf
 | Module | Option | Config key |
 |---|---|---|
 | 1. Semantic embedding | disable embedding | `use_semantic_embedding` |
-| 2. VDWSA | disable height maps | `use_height_map` |
-| 2. VDWSA | center circular mask instead of visibility mask | `use_center_circle_mask` + `circle_mask_radius` |
-| 2. VDWSA | SEBlock attention instead of visibility mask | `use_se_attention` |
+| 2. VIFE | disable height maps | `use_height_map` |
+| 2. VIFE | center circular mask instead of visibility mask | `use_center_circle_mask` + `circle_mask_radius` |
+| 2. VIFE | SEBlock attention instead of visibility mask | `use_se_attention` |
 | 3. Alignment | polar transformation instead of M_geo | `use_polar_transform` |
 | 3. Alignment | learnable mapping matrix instead of M_geo | `use_learnable_matrix` |
 | 3. Alignment | no alignment (dual-branch gated fusion) | `use_cross_view_alignment` |
