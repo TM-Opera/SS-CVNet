@@ -82,10 +82,10 @@ The ray-cast gradient viewshed mask `M_vis` is replaced with three alternative v
 
 | Variant | Mechanism | Config | R² (BVI / GVI / SVF) |
 |---|---|---|---|
-| NP (Naive-Patch) | full RS patch, no visibility prior | `use_visibility_mask: false` | 0.862 / 0.763 / 0.826 |
-| RC-50m (Radius-Constraint) | binary circular mask of 50 m radius | `use_center_circle_mask: true` | 0.861 / 0.765 / 0.826 |
-| AM (Attention-Mask) | learnable per-pixel soft attention | `use_se_attention: true` | 0.828 / 0.704 / 0.787 |
-| **SS-CVNet** | ray-cast gradient viewshed mask `M_vis` | `use_visibility_mask: true` (default) | **0.876 / 0.791 / 0.847** |
+| NP (Naive-Patch) | Full RS patch | `use_visibility_mask: false` | 0.862 / 0.763 / 0.826 |
+| RC-50m (Radius-Constraint) | Fircular mask of 50 m radius | `use_center_circle_mask: true` | 0.861 / 0.765 / 0.826 |
+| AM (Attention-Mask) | Learnable attention | `use_se_attention: true` | 0.828 / 0.704 / 0.787 |
+| **SS-CVNet** | Ray-cast | `use_visibility_mask: true` (default) | **0.876 / 0.791 / 0.847** |
 
 `M_vis` attains the best score on every metric. Proximity alone (RC-50m) cannot capture 3D occlusion, and the purely data-driven AM injects noise without geometric grounding.
 
@@ -95,26 +95,24 @@ The ray-cast coordinate mapping field `Φ_RS-SV` is compared against four altern
 
 | Variant | Mechanism | Config | R² (BVI / GVI / SVF) |
 |---|---|---|---|
-| DP (Direct-Pooling) | global pooling, no cross-view geometry | — | 0.807 / 0.723 / 0.817 |
-| PF (Polar-Flat) | flat-terrain polar transform | `use_polar_transform: true` | 0.866 / 0.782 / 0.833 |
-| STN (Learnable-STN) | learnable global affine warp | `use_learnable_matrix: true` | 0.849 / 0.733 / 0.815 |
-| CA (Cross-Attention) | soft cross-attention alignment | — | 0.855 / 0.751 / 0.830 |
-| **SS-CVNet** | ray-cast mapping field `Φ_RS-SV` | default | **0.876 / 0.791 / 0.847** |
+| DP (Direct-Pooling) | Global pooling | — | 0.807 / 0.723 / 0.817 |
+| PF (Polar-Flat) | Polar transform | `use_polar_transform: true` | 0.866 / 0.782 / 0.833 |
+| STN (Learnable-STN) | Spatial transformer | `use_learnable_matrix: true` | 0.849 / 0.733 / 0.815 |
+| CA (Cross-Attention) | Soft cross-attention alignment | `fusion_strategy: cma` | 0.855 / 0.751 / 0.830 |
+| **SS-CVNet** | Ray-cast mapping | default | **0.876 / 0.791 / 0.847** |
 
 Explicit geometry outperforms data-driven alignment, which in turn outperforms geometry-free pooling — confirming that dense, physically grounded correspondences are essential for cross-view feature transfer. An additional code-only option, `use_cross_view_alignment: false`, bypasses the unified mapping in favor of dual-branch gated fusion.
 
-### Group 3 — Feature fusion strategy 
+### Group 3 — Feature fusion strategy (Module 3)
 
-The FiLM-based semantic gating of the semantic prior `S_S` is compared against three alternative fusion schemes:
+The fusion of the semantic features with the warped texture features inside the cross-view alignment module is compared across three schemes:
 
 | Variant | Mechanism | Config | R² (BVI / GVI / SVF) |
 |---|---|---|---|
-| RSC (Raw-Semantic Concat) | one-hot prior concatenated as channels | — | 0.852 / 0.762 / 0.821 |
-| CMA (Cross-Modal Attention) | cross-attention between features and the prior | — | 0.855 / 0.751 / 0.830 |
-| SSI (Static Semantic-Infill) | fixed per-class embeddings fill the sky region | — | 0.852 / 0.765 / 0.826 |
-| **SS-CVNet** | dynamic class-conditional FiLM gating | `use_semantic_embedding: true` (default) | **0.876 / 0.791 / 0.847** |
-
-Dynamic, class-conditional channel-wise modulation decouples the three targets and sustains high accuracy on all of them. Setting `use_semantic_embedding: false` disables the semantic prior (zero-filled features).
+| RSC (Raw-Semantic Concat) | Static concat | `fusion_strategy: rsc` | 0.852 / 0.762 / 0.821 |
+| CMA (Cross-Modal Attention) | Soft attention | `fusion_strategy: cma` | 0.855 / 0.751 / 0.830 |
+| SSI (Static Semantic-Infill) | Linear infill | `fusion_strategy: ssi` | 0.852 / 0.765 / 0.826 |
+| **SS-CVNet (gate)** | Dynamic gating | `fusion_strategy: gate` (default) | 0.876 / 0.791 / 0.847 |
 
 ### Running an ablation
 
@@ -133,10 +131,18 @@ python train.py --config configs/SS-CVNet.yaml \
     --set model.ablation.use_learnable_matrix true \
     --set exp_name sscvnet_stn
 
-# Disable the semantic prior (Group 3 entry point)
+# RSC / CMA / SSI fusion variants (Group 3)
 python train.py --config configs/SS-CVNet.yaml \
-    --set model.ablation.use_semantic_embedding false \
-    --set exp_name sscvnet_no_semantic
+    --set model.ablation.fusion_strategy rsc \
+    --set exp_name sscvnet_rsc
+
+python train.py --config configs/SS-CVNet.yaml \
+    --set model.ablation.fusion_strategy cma \
+    --set exp_name sscvnet_cma
+
+python train.py --config configs/SS-CVNet.yaml \
+    --set model.ablation.fusion_strategy ssi \
+    --set exp_name sscvnet_ssi
 ```
 
 More examples and a recommended ablation workflow can be found in the comments of [configs/SS-CVNet.yaml](configs/SS-CVNet.yaml).
