@@ -27,7 +27,7 @@ python train.py --config configs/SS-CVNet.yaml
 nohup python train.py --config configs/SS-CVNet.yaml > /dev/null 2>&1 &
 ```
 
-Outputs (best model, per-epoch metrics) are written to `results/<perspective>/<exp_name>/`.
+Outputs (best model, per-epoch metrics) are written to `Parameter/<perspective>/<exp_name>/`.
 
 Useful overrides:
 
@@ -74,31 +74,69 @@ python generate/Cities_predicate_multi_view.py --config configs/SS-CVNet.yaml --
 
 ## Ablation Options
 
-All ablations are controlled by `model.ablation` in [configs/SS-CVNet.yaml](configs/SS-CVNet.yaml):
+Following Section 4.3 of the paper, the ablation study covers three groups of experiments. All switches live under `model.ablation` in [configs/SS-CVNet.yaml](configs/SS-CVNet.yaml).
 
-| Module | Option | Config key |
-|---|---|---|
-| 1. Semantic embedding | disable embedding | `use_semantic_embedding` |
-| 2. VIFE | disable height maps | `use_height_map` |
-| 2. VIFE | center circular mask instead of visibility mask | `use_center_circle_mask` + `circle_mask_radius` |
-| 2. VIFE | SEBlock attention instead of visibility mask | `use_se_attention` |
-| 3. Alignment | polar transformation instead of M_geo | `use_polar_transform` |
-| 3. Alignment | learnable mapping matrix instead of M_geo | `use_learnable_matrix` |
-| 3. Alignment | no alignment (dual-branch gated fusion) | `use_cross_view_alignment` |
+### Group 1 — Visibility-aware encoding
 
-Run an ablation via `--set` overrides and give the experiment a distinct name:
+The ray-cast gradient viewshed mask `M_vis` is replaced with three alternative visibility priors:
+
+| Variant | Mechanism | Config | R² (BVI / GVI / SVF) |
+|---|---|---|---|
+| NP (Naive-Patch) | full RS patch, no visibility prior | `use_visibility_mask: false` | 0.862 / 0.763 / 0.826 |
+| RC-50m (Radius-Constraint) | binary circular mask of 50 m radius | `use_center_circle_mask: true` | 0.861 / 0.765 / 0.826 |
+| AM (Attention-Mask) | learnable per-pixel soft attention | `use_se_attention: true` | 0.828 / 0.704 / 0.787 |
+| **SS-CVNet** | ray-cast gradient viewshed mask `M_vis` | `use_visibility_mask: true` (default) | **0.876 / 0.791 / 0.847** |
+
+`M_vis` attains the best score on every metric. Proximity alone (RC-50m) cannot capture 3D occlusion, and the purely data-driven AM injects noise without geometric grounding.
+
+### Group 2 — Cross-view mapping mechanism 
+
+The ray-cast coordinate mapping field `Φ_RS-SV` is compared against four alternative alignment strategies:
+
+| Variant | Mechanism | Config | R² (BVI / GVI / SVF) |
+|---|---|---|---|
+| DP (Direct-Pooling) | global pooling, no cross-view geometry | — | 0.807 / 0.723 / 0.817 |
+| PF (Polar-Flat) | flat-terrain polar transform | `use_polar_transform: true` | 0.866 / 0.782 / 0.833 |
+| STN (Learnable-STN) | learnable global affine warp | `use_learnable_matrix: true` | 0.849 / 0.733 / 0.815 |
+| CA (Cross-Attention) | soft cross-attention alignment | — | 0.855 / 0.751 / 0.830 |
+| **SS-CVNet** | ray-cast mapping field `Φ_RS-SV` | default | **0.876 / 0.791 / 0.847** |
+
+Explicit geometry outperforms data-driven alignment, which in turn outperforms geometry-free pooling — confirming that dense, physically grounded correspondences are essential for cross-view feature transfer. An additional code-only option, `use_cross_view_alignment: false`, bypasses the unified mapping in favor of dual-branch gated fusion.
+
+### Group 3 — Feature fusion strategy 
+
+The FiLM-based semantic gating of the semantic prior `S_S` is compared against three alternative fusion schemes:
+
+| Variant | Mechanism | Config | R² (BVI / GVI / SVF) |
+|---|---|---|---|
+| RSC (Raw-Semantic Concat) | one-hot prior concatenated as channels | — | 0.852 / 0.762 / 0.821 |
+| CMA (Cross-Modal Attention) | cross-attention between features and the prior | — | 0.855 / 0.751 / 0.830 |
+| SSI (Static Semantic-Infill) | fixed per-class embeddings fill the sky region | — | 0.852 / 0.765 / 0.826 |
+| **SS-CVNet** | dynamic class-conditional FiLM gating | `use_semantic_embedding: true` (default) | **0.876 / 0.791 / 0.847** |
+
+Dynamic, class-conditional channel-wise modulation decouples the three targets and sustains high accuracy on all of them. Setting `use_semantic_embedding: false` disables the semantic prior (zero-filled features).
+
+### Running an ablation
+
+Variants marked with a config key can be trained directly via `--set` overrides:
 
 ```bash
-# Center circular mask (radius 50)
+# RC-50m: circular mask instead of the ray-cast visibility mask
 python train.py --config configs/SS-CVNet.yaml \
-    --set model.ablation.use_center_circle_mask true \
     --set model.ablation.use_visibility_mask false \
-    --set exp_name sscvnet_circle50
+    --set model.ablation.use_center_circle_mask true \
+    --set model.ablation.circle_mask_radius 50 \
+    --set exp_name sscvnet_rc50
 
-# Polar transformation alignment
+# STN: learnable mapping matrix instead of the ray-cast mapping field
 python train.py --config configs/SS-CVNet.yaml \
-    --set model.ablation.use_polar_transform true \
-    --set exp_name sscvnet_polar
+    --set model.ablation.use_learnable_matrix true \
+    --set exp_name sscvnet_stn
+
+# Disable the semantic prior (Group 3 entry point)
+python train.py --config configs/SS-CVNet.yaml \
+    --set model.ablation.use_semantic_embedding false \
+    --set exp_name sscvnet_no_semantic
 ```
 
 More examples and a recommended ablation workflow can be found in the comments of [configs/SS-CVNet.yaml](configs/SS-CVNet.yaml).
