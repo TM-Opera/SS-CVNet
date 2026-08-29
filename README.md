@@ -2,6 +2,10 @@
 
 SS-CVNet predicts street view indicators — **BVI** (Green View Index), **GVI** (Sky View Index), and **SVF** (Sky View Factor) — directly from satellite imagery. It establishes a geometric correspondence between the satellite view and the ground panorama via physics-based ray casting, and fuses RGB appearance with building/tree height information using depth-aware attention.
 
+## Framework
+
+![SS-CVNet framework](framework.png)
+
 ## Quick Start
 
 ### 1. Prerequisite: generate the mask data
