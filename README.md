@@ -17,6 +17,17 @@ python generate/generate_masks.py \
     --config configs/SS-CVNet.yaml \
     --cities all cities
 ```
+**Optional but recommended:** merge the 6 per-sample NPY files (3 modalities + 3 masks) into a single NPZ file with [tools/merge_samples.py](tools/merge_samples.py). This cuts filesystem calls per sample from 6 to 1 and speeds up data loading:
+
+```bash
+python tools/merge_samples.py \
+    --input data/processed/patches_npy \
+    --output data/processed/patches_merged \
+    --workers 8 \
+    --check-existing
+```
+
+Point `data.feature_root` in [configs/SS-CVNet.yaml](configs/SS-CVNet.yaml) to `data2/processed/patches_merged` (the default) to load the merged NPZ files.
 
 ### 2. Train
 
