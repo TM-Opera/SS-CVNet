@@ -1,0 +1,685 @@
+# SS-CVNet training configuration
+# VIFE depth-aware fusion + ablation option support
+
+# =====================================================================
+# Experiment identification
+# =====================================================================
+# Experiment naming convention: sscvnet_{feature_description}
+#
+# Naming rules:
+# 1. Basic format: sscvnet_{configuration description}
+# 2. Descriptive naming that clearly expresses the experiment configuration
+# 3. Use underscores to separate multiple features
+# 4. Avoid abbreviations (unless very common)
+#
+# Common naming examples:
+# =============
+# Module 2 mask options:
+# - sscvnet_visibility      # original visibility mask (full baseline)
+# - sscvnet_circle50        # center circular mask (radius 50 pixels)
+# - sscvnet_circle30        # center circular mask (radius 30 pixels)
+# - sscvnet_se16            # SEBlock attention (reduction ratio 16)
+# - sscvnet_se8             # SEBlock attention (reduction ratio 8)
+# - sscvnet_nomask          # no mask
+#
+# Module 3 alignment options:
+# - sscvnet_polar           # polar transformation
+# - sscvnet_learned         # learnable matrix
+# - sscvnet_noalignment     # no cross-view alignment
+#
+# Combined experiments:
+# - sscvnet_polar_se16      # polar transformation + SEBlock
+# - sscvnet_learned_circle50  # learnable matrix + center circular mask
+#
+# Data split experiments:
+# - sscvnet_val_tokyo       # Tokyo as the validation set (single city)
+# - sscvnet_val_usa         # US cities as the validation set
+# - sscvnet_val_europe      # European cities as the validation set
+#
+# nohup python train.py --config configs/SS-CVNet.yaml > /dev/null 2>&1 &
+
+exp_name: sscvnet
+
+# For backward compatibility with train.py
+exp:
+  model_name: sscvnet
+  version: v1
+  output_root: Parameter
+
+# Random seed
+seed: 42
+
+# Device configuration
+device: cuda:0
+
+# =====================================================================
+# Data configuration
+# =====================================================================
+data:
+  # Data paths
+  csv_path: data2/processed/multi_view.csv       #  data2/processed/complete_mapping_data_clean3.csv
+  feature_root: data2/processed/patches_merged                     #  data2/processed/fisheye.csv
+                                                                   #  data2/processed/multi_view.csv
+  perspective: multi_view
+
+  # Modalities to use
+  modalities:
+    - rgb                      # or use rsi
+    - building_height
+    - tree_height
+
+  # =================================================================
+  # Data split modes (two modes, choose one)
+  # =================================================================
+
+  # Mode 1: random ratio split (default mode)
+  # - Randomly splits the data of all cities into training and validation sets by ratio
+  # - Use case: sufficient data, a random split is desired
+  train_split: 0.8              # training set ratio (0.8 means 80%)
+  val_split: 0.2                # validation set ratio (0.2 means 20%)
+
+  # Mode 2: split by city (Leave-One-City-Out or custom validation set)
+  # - Automatically enabled when val_cities is set
+  # - The cities specified by val_cities become the validation set
+  # - The remaining cities become the training set
+  # - train_split and val_split are ignored in this mode
+  # - Use case: cross-city generalization tests, Leave-One-City-Out validation
+  val_cities: null              # validation city list; null means Mode 1
+                                # example 1: ['San_Francisco']  # single validation city
+                                # example 2: ['San_Francisco', 'Chicago']  # multiple validation cities
+                                # example 3: []  # empty list means Mode 1
+
+  # Overall city selection (applies to both modes)
+  cities: all                   # all: use all 33 cities
+                                # or a subset: ['Adelaide', 'San_Francisco', 'Chicago']
+                                # note: val_cities must be a subset of cities
+
+  # Data loader configuration
+  batch_size: 256
+  target_size: [128, 128]
+  num_workers: 8
+  pin_memory: true
+  shuffle: true
+
+  # Use pre-generated masks (required)
+  use_generated_masks: true
+  use_npz_format: true
+
+# =====================================================================
+# Model configuration - SS-CVNet
+# =====================================================================
+model:
+  # Architecture type
+  architecture_type: sscvnet
+
+  # Ablation option configuration
+  ablation:
+    # Module 1: semantic embedding
+    use_semantic_embedding: true    # whether to use semantic embedding
+
+    # Module 2: VIFE ablation options
+    use_height_map: true            # whether to use height maps (building_height + tree_height)
+    use_visibility_mask: true       # whether to use the pre-computed visibility mask
+    use_center_circle_mask: false   # Module 2 option 1: use a center circular mask instead of the visibility mask
+    circle_mask_radius: 50          # center circular mask radius (pixels)
+    use_se_attention: false         # Module 2 option 2: use SEBlock attention instead of the visibility mask
+
+    # Module 3: cross-view alignment ablation options
+    use_cross_view_alignment: true  # whether to use cross-view alignment
+    use_polar_transform: false      # Module 3 option 1: use polar transformation instead of M_geo
+    polar_output_size: [128, 256]   # polar transformation output size [height, width]
+    use_learnable_matrix: false     # Module 3 option 2: use a learnable matrix instead of M_geo
+    sat_resolution: [128, 128]      # satellite image resolution (used by the learnable matrix)
+
+    # Module 3 fusion strategy (Section 4.3.3), applied to the semantic/texture fusion
+    # inside the cross-view alignment module (used when use_cross_view_alignment=true)
+    fusion_strategy: gate           # 'gate' (default): per-channel gating
+                                    # 'rsc': Raw-Semantic Concat + 1×1 conv projection
+                                    # 'cma': window-based multi-head cross-modal attention
+                                    # 'ssi': element-wise addition + 1×1 conv projection
+
+  # Module 2: VIFE depth-aware self-attention
+  module2:
+    lambda_weight: 0.8              # depth similarity weight coefficient
+    use_window_attention: true      # whether to use window attention
+    window_size: 4                  # window size
+    se_reduction: 2                 # SEBlock reduction ratio (only effective when use_se_attention=true)
+
+  # Module 4: backbone (BackboneEncoder)
+  module4:
+    backbone_type: resnet50         # resnet18/34/50/101, convnext_tiny/small/base
+                                    # note: must match the backbone used at training time
+                                    # resnet50 was used for training; do not change it
+
+  # Module 5: classification prediction
+  module5:
+    hidden_dim: 512
+    dropout_p: 0.2
+
+# =====================================================================
+# Training configuration
+# =====================================================================
+train:
+  # Basic training parameters
+  epochs: 100
+  lr: 0.003
+  early_stopping_patience: 100
+  use_weighted_loss: false
+  label_weights: [1.0, 0.8, 1.5]
+
+  # Optimizer configuration
+  optimizer: adamw
+  weight_decay: 0.0002
+
+# =====================================================================
+# Evaluation configuration
+# =====================================================================
+eval:
+  # Task type
+  task_type: regression
+
+  # Evaluation metrics
+  metrics:
+    - mse
+    - mae
+    - rmse
+    - r2
+
+  # Model selection strategy
+  best_metric: val_ALL_r2
+  best_mode: max
+
+  # Validation interval
+  val_interval: 1
+
+# =====================================================================
+# Logging configuration
+# =====================================================================
+logging:
+  console_level: INFO
+  log_interval: 1
+
+# nohup python train.py --config configs/SS-CVNet.yaml > /dev/null 2>&1 &
+
+# =====================================================================
+# Ablation experiment configuration examples
+# =====================================================================
+
+# Example 1: full model (baseline)
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: true
+#     use_visibility_mask: true
+#     use_cross_view_alignment: true
+
+# Example 2: without semantic embedding (Module 1 ablation)
+# model:
+#   ablation:
+#     use_semantic_embedding: false
+#     use_height_map: true
+#     use_visibility_mask: true
+#     use_cross_view_alignment: true
+
+# Example 3: without height maps (Module 2 ablation)
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: false
+#     use_visibility_mask: true
+#     use_cross_view_alignment: true
+
+# Example 4: center circular mask (Module 2 variant 1)
+# naming: sscvnet_circle50
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true --set model.ablation.circle_mask_radius 50 --set exp_name sscvnet_circle50
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true --set model.ablation.circle_mask_radius 50 --set exp_name sscvnet_circle50 > /dev/null 2>&1 &
+#
+# or set it in the config file:
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: true
+#     use_visibility_mask: false
+#     use_center_circle_mask: true
+#     circle_mask_radius: 50
+#     use_cross_view_alignment: true
+
+# Example 5: SEBlock attention (Module 2 variant 2)
+# naming: sscvnet_se16 (SEBlock + reduction ratio 16)
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_se_attention true --set model.module2.se_reduction 16 --set exp_name sscvnet_se16
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_se_attention true --set model.module2.se_reduction 16 --set exp_name sscvnet_se16 > /dev/null 2>&1 &
+#
+# or set it in the config file:
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: true
+#     use_visibility_mask: false
+#     use_se_attention: true
+#     use_cross_view_alignment: true
+#   module2:
+#     se_reduction: 16
+
+# Example 6: polar transformation (Module 3 variant 1)
+# naming: sscvnet_polar
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_polar_transform true --set model.ablation.polar_output_size "[128,256]" --set exp_name sscvnet_polar
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_polar_transform true --set model.ablation.polar_output_size "[128,256]" --set exp_name sscvnet_polar > /dev/null 2>&1 &
+#
+# or set it in the config file:
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: true
+#     use_visibility_mask: true
+#     use_cross_view_alignment: true
+#     use_polar_transform: true
+#     polar_output_size: [128, 256]
+
+# Example 7: learnable matrix (Module 3 variant 2)
+# naming: sscvnet_learned
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_learnable_matrix true --set model.ablation.sat_resolution "[128,128]" --set exp_name sscvnet_learned
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_learnable_matrix true --set model.ablation.sat_resolution "[128,128]" --set exp_name sscvnet_learned > /dev/null 2>&1 &
+#
+# or set it in the config file:
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: true
+#     use_visibility_mask: true
+#     use_cross_view_alignment: true
+#     use_learnable_matrix: true
+#     sat_resolution: [128, 128]
+
+# Example 8: without cross-view alignment (Module 3 ablation, dual-branch gated fusion)
+# model:
+#   ablation:
+#     use_semantic_embedding: true
+#     use_height_map: true
+#     use_visibility_mask: true
+#     use_cross_view_alignment: false
+
+# Example 9: minimal model (all modules disabled, base network only)
+# model:
+#   ablation:
+#     use_semantic_embedding: false
+#     use_height_map: true
+#     use_visibility_mask: false
+#     use_cross_view_alignment: false
+
+# =====================================================================
+# Advanced combination examples
+# =====================================================================
+
+# Combination 1: polar transformation + SEBlock attention
+# naming: sscvnet_polar_se16
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_polar_transform true --set model.ablation.use_se_attention true --set model.module2.se_reduction 16 --set exp_name sscvnet_polar_se16
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_polar_transform true --set model.ablation.use_se_attention true --set model.module2.se_reduction 16 --set exp_name sscvnet_polar_se16 > /dev/null 2>&1 &
+
+# Combination 2: learnable matrix + center circular mask
+# naming: sscvnet_learned_circle50
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_learnable_matrix true --set model.ablation.use_center_circle_mask true --set model.ablation.circle_mask_radius 50 --set exp_name sscvnet_learned_circle50
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_learnable_matrix true --set model.ablation.use_center_circle_mask true --set model.ablation.circle_mask_radius 50 --set exp_name sscvnet_learned_circle50 > /dev/null 2>&1 &
+
+# Combination 3: full ablation study (comparing all Module 2 mask options)
+# # Baseline (original visibility mask)
+# naming: sscvnet_baseline
+# python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_baseline
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_baseline > /dev/null 2>&1 &
+#
+# # Center circular mask
+# naming: sscvnet_circle50
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true --set model.ablation.use_visibility_mask false --set exp_name sscvnet_circle50
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true --set model.ablation.use_visibility_mask false --set exp_name sscvnet_circle50 > /dev/null 2>&1 &
+#
+# # SEBlock attention
+# naming: sscvnet_se16
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_se_attention true --set model.ablation.use_visibility_mask false --set exp_name sscvnet_se16
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_se_attention true --set model.ablation.use_visibility_mask false --set exp_name sscvnet_se16 > /dev/null 2>&1 &
+#
+# # No mask
+# naming: sscvnet_nomask
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_visibility_mask false --set exp_name sscvnet_nomask
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_visibility_mask false --set exp_name sscvnet_nomask > /dev/null 2>&1 &
+
+# =====================================================================
+# Usage
+# =====================================================================
+
+# Train the full model (using the defaults from this config file):
+# python train.py --config configs/SS-CVNet.yaml
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml > /dev/null 2>&1 &
+
+# Override config parameters via the command line:
+# python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true > /dev/null 2>&1 &
+
+# Use only specific cities:
+# python train.py --config configs/SS-CVNet.yaml --cities Adelaide San_Francisco
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --cities Adelaide San_Francisco > /dev/null 2>&1 &
+
+# =====================================================================
+# Module 2 ablation options in detail
+# =====================================================================
+
+# 1. Center circular mask (use_center_circle_mask)
+#    Pros: no pre-computed mask needed, simple and efficient, highly interpretable
+#    Cons: ignores edge information, assumes the capture position is at the center
+#    Parameter tuning:
+#      - circle_mask_radius: circular radius (pixels)
+#        * small images (64×64): 20-30
+#        * medium images (128×128): 40-60 (50 recommended)
+#        * large images (256×256): 80-120
+#
+#    usage example:
+#    python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true --set model.ablation.circle_mask_radius 50
+#
+#    background run:
+#    nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_center_circle_mask true --set model.ablation.circle_mask_radius 50 > /dev/null 2>&1 &
+
+# 2. SEBlock attention (use_se_attention)
+#    Pros: learned attention, adaptive channel weights, few parameters (+512)
+#    Cons: channel-level rather than pixel-level, requires training
+#    Parameter tuning:
+#      - se_reduction: reduction ratio (default 16)
+#        * 8: stronger attention capacity, slightly more parameters
+#        * 16: balances performance and efficiency (recommended)
+#        * 32: fewest parameters, slightly lower performance
+#
+#    usage example:
+#    python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_se_attention true --set model.module2.se_reduction 16
+#
+#    background run:
+#    nohup python train.py --config configs/SS-CVNet.yaml --set model.ablation.use_se_attention true --set model.module2.se_reduction 16 > /dev/null 2>&1 &
+
+# =====================================================================
+# Module 3 ablation options in detail
+# =====================================================================
+
+# 1. Polar transformation (use_polar_transform)
+#    Pros: based on geometric priors, no pre-computed M_geo needed, physically interpretable
+#    Cons: assumes center capture, may not fully match the real view
+#    Parameter tuning:
+#      - polar_output_size: [height, width]
+#        * [32, 256]: low resolution, fast training
+#        * [128, 256]: medium resolution, balances speed and accuracy (recommended)
+#        * [256, 512]: high resolution, best accuracy
+#
+#    usage example:
+#    python train.py --config configs/SS-CVNet.yaml \
+#        --set model.ablation.use_polar_transform true \
+#        --set model.ablation.polar_output_size "[128, 256]"
+
+# 2. Learnable matrix (use_learnable_matrix)
+#    Pros: data-driven, adaptively learned, captures complex relationships
+#    Cons: many parameters (+65K), may overfit, needs more data
+#    Parameter tuning:
+#      - sat_resolution: satellite image resolution [H, W]
+#        * should match the actual data size
+#        * affects the parameter count of the learnable matrix
+#
+#    usage example:
+#    python train.py --config configs/SS-CVNet.yaml \
+#        --set model.ablation.use_learnable_matrix true \
+#        --set model.ablation.sat_resolution "[128, 128]"
+
+# =====================================================================
+# Data split modes in detail
+# =====================================================================
+
+# Mode 1: random ratio split (default)
+# =====================================================================
+# Use cases:
+#   - Sufficient data, a random split is desired
+#   - City-level differences are not a concern
+#   - Maximize training data utilization
+#
+# Configuration:
+#   data:
+#     cities: all                    # use all cities
+#     val_cities: null               # or simply omit this parameter
+#     train_split: 0.8
+#     val_split: 0.2
+#
+# Effect:
+#   - Data from all cities is shuffled randomly
+#   - 80% of samples become the training set
+#   - 20% of samples become the validation set
+#
+# usage example:
+# python train.py --config configs/SS-CVNet.yaml
+
+# Mode 2: split by city (Leave-One-City-Out)
+# =====================================================================
+# Use cases:
+#   - Test cross-city generalization of the model
+#   - Leave-One-City-Out (LOCO) validation
+#   - Some cities serve as test sets (unseen cities)
+#
+# Configuration:
+#   data:
+#     cities: all                    # use all cities
+#     val_cities: ['San_Francisco']  # specify validation cities
+#     # train_split and val_split are ignored
+#
+# Effect:
+#   - All samples of San_Francisco become the validation set
+#   - Samples of the remaining 32 cities become the training set
+#   - Strict city-level split, no data leakage
+#
+# usage example:
+# python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['San_Francisco']"
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['San_Francisco']" > /dev/null 2>&1 &
+#
+# or set it in the config file:
+# data:
+#   val_cities: ['San_Francisco']
+
+# Multi-city validation set example:
+# =====================================================================
+# Scenario: validate on multiple cities
+# python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['San_Francisco', 'Chicago', 'Boston']"
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['San_Francisco', 'Chicago', 'Boston']" > /dev/null 2>&1 &
+#
+# Effect:
+#   - San_Francisco, Chicago, Boston become the validation set
+#   - The remaining 30 cities become the training set
+
+# Specified city subset + city split:
+# =====================================================================
+# Scenario: train on only a few cities and hold one out for validation
+# python train.py --config configs/SS-CVNet.yaml --set data.cities "['Adelaide', 'San_Francisco', 'Chicago']" --set data.val_cities "['San_Francisco']"
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set data.cities "['Adelaide', 'San_Francisco', 'Chicago']" --set data.val_cities "['San_Francisco']" > /dev/null 2>&1 &
+#
+# Effect:
+#   - Training set: Adelaide, Chicago
+#   - Validation set: San_Francisco
+#
+# note: val_cities must be a subset of cities!
+
+# Full Leave-One-City-Out experiment:
+# =====================================================================
+# Use each city as the validation set in turn, training 33 models
+#
+# for city in Adelaide Atlanta Austin Boston Chicago ...; do
+#   python train.py --config configs/SS-CVNet.yaml \
+#     --set data.val_cities "['$city']" \
+#     --set exp_name loco_${city}
+# done
+
+# City group experiments:
+# =====================================================================
+# Scenario: validate by geographic region groups
+# # US cities as the validation set
+# naming: sscvnet_val_usa
+# python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['San_Francisco', 'Chicago', 'Boston', 'Denver']" --set exp_name sscvnet_val_usa
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['San_Francisco', 'Chicago', 'Boston', 'Denver']" --set exp_name sscvnet_val_usa > /dev/null 2>&1 &
+#
+# # European cities as the validation set
+# naming: sscvnet_val_europe
+# python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['London', 'Paris', 'Berlin', 'Rome']" --set exp_name sscvnet_val_europe
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set data.val_cities "['London', 'Paris', 'Berlin', 'Rome']" --set exp_name sscvnet_val_europe > /dev/null 2>&1 &
+
+# =====================================================================
+# Recommended ablation workflow
+# =====================================================================
+
+# Step 1: train the baseline (full model)
+# naming: sscvnet_baseline
+# python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_baseline
+#
+# background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_baseline > /dev/null 2>&1 &
+#
+# Step 2: Module 2 ablation - test different mask options
+# # Center circular mask
+# naming: sscvnet_circle50
+# python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_circle50 --set model.ablation.use_center_circle_mask true --set model.ablation.use_visibility_mask false
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_circle50 --set model.ablation.use_center_circle_mask true --set model.ablation.use_visibility_mask false > /dev/null 2>&1 &
+#
+# # SEBlock attention
+# naming: sscvnet_se16
+# python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_se16 --set model.ablation.use_se_attention true --set model.ablation.use_visibility_mask false
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_se16 --set model.ablation.use_se_attention true --set model.ablation.use_visibility_mask false > /dev/null 2>&1 &
+#
+# Step 3: Module 3 ablation - test different alignment options
+# # Polar transformation
+# naming: sscvnet_polar
+# python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_polar --set model.ablation.use_polar_transform true
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_polar --set model.ablation.use_polar_transform true > /dev/null 2>&1 &
+#
+# # Learnable matrix
+# naming: sscvnet_learned
+# python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_learned --set model.ablation.use_learnable_matrix true
+#
+# # background run:
+# nohup python train.py --config configs/SS-CVNet.yaml --set exp_name sscvnet_learned --set model.ablation.use_learnable_matrix true > /dev/null 2>&1 &
+#
+# Step 4: compare experiments and select the best configuration
+
+# =====================================================================
+# Notes and FAQ
+# =====================================================================
+
+# 1. val_cities rules
+#    - val_cities must be a subset of cities
+#    - if cities=all, val_cities can be any city list
+#    - if cities specifies a subset, val_cities must be within that subset
+#    - val_cities=null or unset: ratio split mode is used
+#    - val_cities=[]: empty list, equivalent to null, ratio split mode is used
+#
+# 2. Data volume check
+#    - City splits may cause training/validation imbalance
+#    - Check the sample counts per city first
+#    - If a validation city has too few samples, consider choosing multiple cities
+#
+# 3. City name spelling
+#    - City names must match the dataset spelling exactly
+#    - Check all available cities in the dataset first
+#    - Common mistakes: inconsistent casing, typos
+#
+# 4. Compatibility
+#    - This configuration is fully backward compatible with the original logic
+#    - If val_cities is unset, the original train_split/val_split is used
+#    - Existing training scripts run without modification
+#
+# 5. Implementation notes (for developers)
+#    - The data loader must detect the val_cities parameter
+#    - If val_cities is not null/empty, city split mode is enabled
+#    - If val_cities is null/empty, ratio split mode is used
+#    - Add log output showing the data split mode actually used
+
+# =====================================================================
+# Available city list (reference)
+# =====================================================================
+#
+# The data2 dataset contains the following 33 cities:
+# Adelaide, Atlanta, Auckland, Bangkok, Berlin, Boston,
+# Chicago, Copenhagen, Denver, Helsinki, Hong_Kong, Lisbon,
+# London, Los_Angeles, Manila, Melbourne, Miami, Milan,
+# Minneapolis, Montreal, Munich, New_York, Orlando, Oslo,
+# Paris, Phoenix, Pittsburgh, Rome, San_Diego, San_Francisco,
+# Seattle, Singapore, Tokyo, Toronto, Vancouver, Vienna,
+# Washington_DC, Zurich
+#
+# Check the actual city list:
+# python -c "import pandas as pd; df=pd.read_csv('data2/processed/multi_view.csv'); print(df['city'].unique().tolist())"
+
+# =====================================================================
+# Common configuration templates
+# =====================================================================
+
+# Template 1: standard training (all cities, random split)
+# data:
+#   cities: all
+#   train_split: 0.8
+#   val_split: 0.2
+#   val_cities: null
+
+# Template 2: Leave-One-City-Out (single validation city)
+# data:
+#   cities: all
+#   val_cities: ['San_Francisco']
+#   # train_split and val_split are ignored
+
+# Template 3: regional validation (multiple validation cities)
+# data:
+#   cities: all
+#   val_cities: ['San_Francisco', 'Chicago', 'Boston']
+#   # North American cities as the validation set
+
+# Template 4: specified training cities + specified validation city
+# data:
+#   cities: ['Adelaide', 'Atlanta', 'Austin', 'Boston']
+#   val_cities: ['Boston']
+#   # training: Adelaide, Atlanta, Austin
+#   # validation: Boston
+
+# Template 5: quick experiment (few cities)
+# data:
+#   cities: ['San_Francisco', 'Chicago', 'Boston']
+#   train_split: 0.8
+#   val_split: 0.2
+#   val_cities: null
+#   # 8:2 random split over 3 cities
